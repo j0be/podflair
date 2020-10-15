@@ -1,0 +1,22 @@
+{
+  "name": "tal",
+  "version": "1.0.0",
+  "description": "This American Life Full RSS",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/j0be/tal.git"
+  },
+  "author": "j0be",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/j0be/tal/issues"
+  },
+  "homepage": "https://github.com/j0be/tal#readme",
+  "dependencies": {
+    "php-server": "^0.2.1"
+  }
+}
