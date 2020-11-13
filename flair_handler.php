@@ -34,6 +34,53 @@
     $client->setCurlOption(CURLOPT_USERAGENT, $userAgent);
     $client->setAccessTokenType(OAuth2\Client::ACCESS_TOKEN_BEARER);
 
+    function handleToken($result, $conf, $user) {
+        $access_result = json_decode($result);
+
+        $conf->access_token = $access_result->access_token;
+        $conf->refresh_token = $access_result->refresh_token;
+
+        if ($user) {
+            $conf->access_tokens->{$user} = $access_result->access_token;
+            $conf->refresh_tokens->{$user} = $access_result->refresh_token;
+        }
+
+        $fp = fopen('conf.json', 'w');
+        fwrite($fp, json_encode($conf));
+        fclose($fp);
+
+        return $conf->access_token;
+    }
+
+    function refreshToken($refreshtoken, $user) {
+        echo "Expired token. Let's refresh\r\n";
+
+        $url = 'https://www.reddit.com/api/v1/access_token';
+        $data = array(
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshtoken,
+            'redirect_uri' => $conf->redirect_uri
+        );
+
+        $options = array(
+            'http' => array(
+                'header'  =>
+                    'Authorization: Basic ' . base64_encode($conf->client_id . ':' . $conf->secret) . "\r\n" .
+                    'Content-type: application/x-www-form-urlencoded',
+                'method'  => 'POST',
+                'content' => http_build_query($data)
+            )
+        );
+        $context  = stream_context_create($options);
+        $result = file_get_contents($url, false, $context);
+
+        if ($result === FALSE) {
+            die('We failed to get the access token from that code');
+        }
+
+        $client->setAccessToken(handleToken($result, $conf, $user));
+    }
+
     // If we have a new auth code, let's handle access tokens
     if ($_GET['code']) {
         // Now we need to get access token
@@ -60,27 +107,20 @@
             die('We failed to get the access token from that code');
         }
 
-        $access_result = json_decode($result);
-
-        // If there is no BASE access token, assign it as the current user
-        if (!$conf->access_token) {
-            $conf->access_token = $access_result->access_token;
-        }
+        $token = handleToken($result, $conf, false);
+        $client->setAccessToken($token);
 
         // Get which user we're logged in to store the access token
-        $client->setAccessToken($conf->access_token);
         $userUrl = 'https://oauth.reddit.com/api/v1/me.json';
         $response = $client->fetch($userUrl);
-
         $user = $response['result']['name'];
+
+        $token = handleToken($result, $conf, $user);
 
         if(!$user) {
             die("Uh-oh. We didn't get the user off that account. Please try again (refresh)");
         }
 
-        if ($user === 'podcastsmod') {
-            $conf->access_token = $access_result->access_token;
-        }
         if (!$conf->access_tokens->{$user}) {
             $conf->access_tokens->{$user} = $access_result->access_token;
         }
@@ -96,9 +136,18 @@
     }
 
     // Get the log with the base access token
-    $client->setAccessToken($conf->access_token);
+    $outertoken = $conf->access_tokens->{'podcastsmod'} ?: $conf->access_token;
+    $client->setAccessToken($outertoken);
     $modlogUrl = 'https://oauth.reddit.com/r/podcasts/about/log.json?limit=100&type=removelink';
     $response = $client->fetch($modlogUrl);
+
+    if ($response['code'] === 401 && $conf->refresh_token) {
+        refreshToken($conf->refresh_token);
+    }
+
+    if ($response['code'] === 403) {
+        die('Forbidden');
+    }
 
     $removals = $response['result']['data']['children'];
 
@@ -137,8 +186,15 @@
 
                         if (count($filteredComments) === 0) {
                             $useDefaultAccount = $conf->access_tokens->{$mod} ? false : true;
-                            $token = $conf->access_tokens->{$mod} ?: $conf->access_token;
-                            // $client->setAccessToken($token);
+                            $token = $conf->access_tokens->{$mod} ?: $conf->access_tokens->{'podcastsmod'};
+                            if ($token !== $outertoken) {
+                                $client->setAccessToken($token);
+                                $modlogUrl = 'https://oauth.reddit.com/r/podcasts/about/log.json?limit=1&type=removelink';
+                                $response = $client->fetch($modlogUrl);
+                                if ($response['code'] === 401 && $conf->refresh_tokens->{$mod}) {
+                                    refreshToken($conf->refresh_tokens->{$mod}, $mod);
+                                }
+                            }
                             $message = $reasons->{$flair} ?: false;
 
                             if ($useDefaultAccount) {
